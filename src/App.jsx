@@ -46,7 +46,7 @@ async function fetchProfile(userId) {
 async function createProfile(userId, displayName) {
   const { data, error } = await supabase
     .from("profiles")
-    .insert({ id: userId, display_name: displayName })
+    .upsert({ id: userId, display_name: displayName })
     .select()
     .single();
   if (error) throw error;
@@ -475,7 +475,7 @@ function ProfileSetup({ userId, onDone }) {
       const profile = await createProfile(userId, name.trim());
       onDone(profile);
     } catch (e) {
-      setError("Klarte ikke lagre navnet. Prøv igjen.");
+      setError(e?.message ? `Klarte ikke lagre: ${e.message}` : "Klarte ikke lagre navnet. Prøv igjen.");
     }
     setBusy(false);
   };
