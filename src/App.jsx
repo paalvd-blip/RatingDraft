@@ -1,26 +1,30 @@
 import { useState, useEffect } from "react";
-import { Plus, X, MapPin, Utensils, Users, Sparkles, Star, ArrowLeft, Share2, Check, RefreshCw, Pencil } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
+import {
+  Plus,
+  X,
+  MapPin,
+  Utensils,
+  Users,
+  Sparkles,
+  Star,
+  ArrowLeft,
+  Share2,
+  Check,
+  RefreshCw,
+  Pencil,
+  LogOut,
+  Mail,
+  Lock,
+  User,
+} from "lucide-react";
 
 // ---- Supabase config ----
-// Fyll inn disse to etter du har opprettet et gratis prosjekt på supabase.com
 const SUPABASE_URL = "https://rmrukmijuepsbehlntak.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJtcnVrbWlqdWVwc2JlaGxudGFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzMTI3NjAsImV4cCI6MjA5OTg4ODc2MH0.HAWxs-jI20_pGl_IoR7m1hzRDszd5nIQZXvtdQ1bqVs";
-const configured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJtcnVrbWlqdWVwc2JlaGxudGFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzMTI3NjAsImV4cCI6MjA5OTg4ODc2MH0.HAWxs-jI20_pGl_IoR7m1hzRDszd5nIQZXvtdQ1bqVs";
 
-async function sb(path, opts = {}) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...opts,
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      "Content-Type": "application/json",
-      ...(opts.headers || {}),
-    },
-  });
-  if (!res.ok) throw new Error(await res.text());
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
-}
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 function genCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -31,143 +35,142 @@ function genCode() {
 
 const DEFAULT_CATEGORIES = ["Mat", "Service", "Stemning"];
 
-// ---------- Local storage helpers (device memory: which lists + which name I use) ----------
-function getMyLists() {
-  try {
-    return JSON.parse(localStorage.getItem("rl_my_lists") || "[]");
-  } catch {
-    return [];
-  }
-}
-function saveMyList(entry) {
-  const lists = getMyLists().filter((l) => l.code !== entry.code);
-  lists.unshift(entry);
-  localStorage.setItem("rl_my_lists", JSON.stringify(lists));
+// ---------- Data layer ----------
+
+async function fetchProfile(userId) {
+  const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
-// ---------- Data layer (with in-memory fallback if Supabase not configured) ----------
-const memoryDB = { lists: [], members: [], restaurants: [] };
+async function createProfile(userId, displayName) {
+  const { data, error } = await supabase
+    .from("profiles")
+    .insert({ id: userId, display_name: displayName })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
 
-async function createList(name, categories) {
+async function fetchMyLists(userId) {
+  const { data, error } = await supabase
+    .from("list_members")
+    .select("joined_at, lists(id, name, code, categories)")
+    .eq("user_id", userId)
+    .order("joined_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map((row) => row.lists).filter(Boolean);
+}
+
+async function createList(name, categories, ownerId) {
   const code = genCode();
-  const entry = { name, code, categories };
-  if (!configured) {
-    const row = { id: Date.now(), ...entry, created_at: new Date().toISOString() };
-    memoryDB.lists.push(row);
-    return row;
-  }
-  const [row] = await sb("lists", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(entry),
-  });
-  return row;
+  const { data: list, error } = await supabase
+    .from("lists")
+    .insert({ name, code, categories, owner_id: ownerId })
+    .select()
+    .single();
+  if (error) throw error;
+  const { error: memberError } = await supabase
+    .from("list_members")
+    .insert({ list_id: list.id, user_id: ownerId });
+  if (memberError) throw memberError;
+  return list;
 }
 
 async function findListByCode(code) {
-  if (!configured) {
-    return memoryDB.lists.find((l) => l.code === code.toUpperCase()) || null;
-  }
-  const rows = await sb(`lists?code=eq.${code.toUpperCase()}&select=*`);
-  return rows[0] || null;
+  const { data, error } = await supabase
+    .from("lists")
+    .select("*")
+    .eq("code", code.toUpperCase())
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function joinList(listId, userId) {
+  const { error } = await supabase
+    .from("list_members")
+    .upsert({ list_id: listId, user_id: userId }, { onConflict: "list_id,user_id", ignoreDuplicates: true });
+  if (error) throw error;
 }
 
 async function getList(id) {
-  if (!configured) return memoryDB.lists.find((l) => l.id === id) || null;
-  const rows = await sb(`lists?id=eq.${id}&select=*`);
-  return rows[0] || null;
+  const { data, error } = await supabase.from("lists").select("*").eq("id", id).maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
-async function getMembers(listId) {
-  if (!configured) return memoryDB.members.filter((m) => m.list_id === listId);
-  return sb(`members?list_id=eq.${listId}&select=*`);
-}
-
-async function ensureMember(listId, name) {
-  const existing = await getMembers(listId);
-  const found = existing.find((m) => m.name.toLowerCase() === name.toLowerCase());
-  if (found) return found;
-  if (!configured) {
-    const row = { id: Date.now(), list_id: listId, name };
-    memoryDB.members.push(row);
-    return row;
-  }
-  const [row] = await sb("members", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ list_id: listId, name }),
-  });
-  return row;
+async function getListMembers(listId) {
+  const { data, error } = await supabase
+    .from("list_members")
+    .select("user_id, profiles(display_name)")
+    .eq("list_id", listId);
+  if (error) throw error;
+  return (data || []).map((row) => ({
+    userId: row.user_id,
+    name: row.profiles?.display_name || "Ukjent",
+  }));
 }
 
 async function getRestaurants(listId) {
-  if (!configured)
-    return memoryDB.restaurants.filter((r) => r.list_id === listId);
-  return sb(`restaurants?list_id=eq.${listId}&select=*&order=created_at.desc`);
+  const { data, error } = await supabase
+    .from("restaurants")
+    .select("*")
+    .eq("list_id", listId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
 }
 
 async function addRestaurantRow(listId, name, place, ratings) {
-  const entry = { list_id: listId, name, place, ratings };
-  if (!configured) {
-    const row = { id: Date.now(), ...entry, created_at: new Date().toISOString() };
-    memoryDB.restaurants.unshift(row);
-    return row;
-  }
-  const [row] = await sb("restaurants", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(entry),
-  });
-  return row;
-}
-
-async function updateRestaurantRatings(restaurantId, ratings) {
-  if (!configured) {
-    const row = memoryDB.restaurants.find((r) => r.id === restaurantId);
-    if (row) row.ratings = ratings;
-    return row;
-  }
-  const [row] = await sb(`restaurants?id=eq.${restaurantId}`, {
-    method: "PATCH",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ ratings }),
-  });
-  return row;
+  const { data, error } = await supabase
+    .from("restaurants")
+    .insert({ list_id: listId, name, place, ratings })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
 }
 
 async function updateRestaurantInfo(restaurantId, name, place) {
-  if (!configured) {
-    const row = memoryDB.restaurants.find((r) => r.id === restaurantId);
-    if (row) {
-      row.name = name;
-      row.place = place;
-    }
-    return row;
-  }
-  const [row] = await sb(`restaurants?id=eq.${restaurantId}`, {
-    method: "PATCH",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ name, place }),
-  });
-  return row;
+  const { data, error } = await supabase
+    .from("restaurants")
+    .update({ name, place })
+    .eq("id", restaurantId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// Merge just the current user's category scores into the existing ratings object
+async function updateMyRatings(restaurantId, userId, categoryScores) {
+  const { data: current, error: fetchError } = await supabase
+    .from("restaurants")
+    .select("ratings")
+    .eq("id", restaurantId)
+    .single();
+  if (fetchError) throw fetchError;
+  const nextRatings = { ...(current.ratings || {}), [userId]: categoryScores };
+  const { data, error } = await supabase
+    .from("restaurants")
+    .update({ ratings: nextRatings })
+    .eq("id", restaurantId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
 }
 
 async function updateListName(listId, name) {
-  if (!configured) {
-    const row = memoryDB.lists.find((l) => l.id === listId);
-    if (row) row.name = name;
-    return row;
-  }
-  const [row] = await sb(`lists?id=eq.${listId}`, {
-    method: "PATCH",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ name }),
-  });
-  return row;
+  const { data, error } = await supabase.from("lists").update({ name }).eq("id", listId).select().single();
+  if (error) throw error;
+  return data;
 }
 
 // ---------- Rating math ----------
-// ratings shape: { [memberName]: { [category]: number } }
+// ratings shape: { [userId]: { [category]: number } }
 function overallAvg(r) {
   const vals = [];
   Object.values(r.ratings || {}).forEach((catMap) => {
@@ -179,8 +182,8 @@ function overallAvg(r) {
   return vals.reduce((a, b) => a + b, 0) / vals.length;
 }
 
-function personAvg(r, memberName) {
-  const catMap = (r.ratings || {})[memberName];
+function personAvg(r, userId) {
+  const catMap = (r.ratings || {})[userId];
   if (!catMap) return null;
   const vals = Object.values(catMap).filter((v) => typeof v === "number");
   if (!vals.length) return null;
@@ -196,10 +199,10 @@ function categoryAvg(r, category) {
 }
 
 function initials(name) {
-  return name.trim().slice(0, 2).toUpperCase();
+  return (name || "?").trim().slice(0, 2).toUpperCase();
 }
 
-// ================= UI =================
+// ================= Shared UI =================
 
 function Stamp({ initial, value }) {
   if (value === null || value === undefined) {
@@ -228,9 +231,7 @@ function RatingSlider({ label, value, onChange }) {
   return (
     <div className="mb-4">
       <div className="flex items-baseline justify-between mb-1.5">
-        <label className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold">
-          {label}
-        </label>
+        <label className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold">{label}</label>
         <span className="font-serif text-lg text-[#f4e4c8]">{value.toFixed(1)}</span>
       </div>
       <input
@@ -255,9 +256,7 @@ function Modal({ title, eyebrow, onClose, children }) {
       <div className="bg-[#3a1014] w-full sm:max-w-md sm:rounded-2xl rounded-t-3xl max-h-[92vh] overflow-y-auto border-t sm:border border-[#d4a24e]/30">
         <div className="sticky top-0 bg-[#3a1014] px-6 pt-6 pb-3 flex items-start justify-between border-b border-[#d4a24e]/20 z-10">
           <div>
-            {eyebrow && (
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[#d4a24e] mb-1">{eyebrow}</p>
-            )}
+            {eyebrow && <p className="text-[10px] uppercase tracking-[0.2em] text-[#d4a24e] mb-1">{eyebrow}</p>}
             <h2 className="font-serif text-2xl text-[#f4e4c8]">{title}</h2>
           </div>
           <button onClick={onClose} className="text-[#c9a876] hover:text-[#f4e4c8] p-1">
@@ -289,21 +288,237 @@ function TextField({ label, icon, ...props }) {
   );
 }
 
-// ---------- Landing: create or join a list ----------
-function Landing({ onEnter }) {
-  const [mode, setMode] = useState(null); // 'create' | 'join' | null
-  const [myLists, setMyLists] = useState(getMyLists());
+function RenameModal({ title, eyebrow, label, initialValue, onSave, onClose }) {
+  const [value, setValue] = useState(initialValue);
+  return (
+    <Modal title={title} eyebrow={eyebrow} onClose={onClose}>
+      <TextField label={label} value={value} onChange={(e) => setValue(e.target.value)} />
+      <button
+        onClick={() => {
+          if (!value.trim()) return;
+          onSave(value.trim());
+          onClose();
+        }}
+        disabled={!value.trim()}
+        className="w-full mt-1 bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg"
+      >
+        Lagre
+      </button>
+    </Modal>
+  );
+}
 
-  // Create form state
-  const [listName, setListName] = useState("");
-  const [yourName, setYourName] = useState("");
-  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+function GlobalStyle() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap');
+      .font-serif { font-family: 'Fraunces', serif; }
+      body { font-family: 'Inter', sans-serif; }
+      input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 18px; height: 18px;
+        border-radius: 50%;
+        background: #f4e4c8;
+        border: 2px solid #d4a24e;
+        cursor: pointer;
+      }
+    `}</style>
+  );
+}
+
+const SAFE_TOP = { paddingTop: "max(2.5rem, calc(env(safe-area-inset-top) + 1.25rem))" };
+const SAFE_TOP_TALL = { paddingTop: "max(3.5rem, calc(env(safe-area-inset-top) + 2rem))" };
+const SAFE_BOTTOM = { bottom: "max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem))" };
+
+// ================= Auth =================
+
+function AuthScreen() {
+  const [tab, setTab] = useState("login"); // 'login' | 'signup'
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const handleLogin = async () => {
+    setBusy(true);
+    setError("");
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) setError(error.message === "Invalid login credentials" ? "Feil e-post eller passord." : error.message);
+    setBusy(false);
+  };
+
+  const handleSignup = async () => {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
+    if (error) {
+      setError(error.message);
+    } else if (!data.session) {
+      setNotice("Konto opprettet! Sjekk e-posten din for en bekreftelseslenke, og logg deretter inn.");
+      setTab("login");
+    }
+    setBusy(false);
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      setError("Skriv inn e-posten din over først.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+    setBusy(false);
+    if (error) setError(error.message);
+    else setNotice("Vi har sendt deg en lenke for å tilbakestille passordet.");
+  };
+
+  return (
+    <div className="min-h-screen bg-[#2a0c0f] text-[#f4e4c8] px-6 pb-10" style={SAFE_TOP_TALL}>
+      <GlobalStyle />
+      <p className="text-[11px] uppercase tracking-[0.3em] text-[#d4a24e] mb-2 flex items-center gap-1.5">
+        <Utensils size={12} /> Restaurantlister
+      </p>
+      <h1 className="font-serif text-4xl leading-tight text-[#f4e4c8] mb-8">
+        Steder dere har
+        <br />
+        spist godt.
+      </h1>
+
+      <div className="flex gap-2 mb-6 bg-[#3a1014] p-1 rounded-lg">
+        <button
+          onClick={() => {
+            setTab("login");
+            setError("");
+            setNotice("");
+          }}
+          className={`flex-1 py-2.5 rounded-md text-sm font-semibold tracking-wide transition-colors ${
+            tab === "login" ? "bg-[#d4a24e] text-[#2a0c0f]" : "text-[#c9a876]"
+          }`}
+        >
+          Logg inn
+        </button>
+        <button
+          onClick={() => {
+            setTab("signup");
+            setError("");
+            setNotice("");
+          }}
+          className={`flex-1 py-2.5 rounded-md text-sm font-semibold tracking-wide transition-colors ${
+            tab === "signup" ? "bg-[#d4a24e] text-[#2a0c0f]" : "text-[#c9a876]"
+          }`}
+        >
+          Opprett konto
+        </button>
+      </div>
+
+      <TextField
+        label="E-post"
+        icon={<Mail size={16} />}
+        type="email"
+        placeholder="deg@eksempel.no"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        autoComplete="email"
+      />
+      <TextField
+        label="Passord"
+        icon={<Lock size={16} />}
+        type="password"
+        placeholder="Minst 6 tegn"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        autoComplete={tab === "login" ? "current-password" : "new-password"}
+      />
+
+      {error && <p className="text-red-300 text-sm mb-3">{error}</p>}
+      {notice && <p className="text-[#d4a24e] text-sm mb-3">{notice}</p>}
+
+      {tab === "login" ? (
+        <>
+          <button
+            onClick={handleLogin}
+            disabled={busy || !email.trim() || !password}
+            className="w-full bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg"
+          >
+            {busy ? "Logger inn …" : "Logg inn"}
+          </button>
+          <button onClick={handleForgotPassword} className="w-full text-center text-[#c9a876] text-sm mt-4">
+            Glemt passord?
+          </button>
+        </>
+      ) : (
+        <button
+          onClick={handleSignup}
+          disabled={busy || !email.trim() || password.length < 6}
+          className="w-full bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg"
+        >
+          {busy ? "Oppretter …" : "Opprett konto"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ProfileSetup({ userId, onDone }) {
+  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // Join form state
+  const save = async () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const profile = await createProfile(userId, name.trim());
+      onDone(profile);
+    } catch (e) {
+      setError("Klarte ikke lagre navnet. Prøv igjen.");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#2a0c0f] text-[#f4e4c8] px-6 pb-10" style={SAFE_TOP_TALL}>
+      <GlobalStyle />
+      <p className="text-[11px] uppercase tracking-[0.3em] text-[#d4a24e] mb-2 flex items-center gap-1.5">
+        <Sparkles size={12} /> Nesten klar
+      </p>
+      <h1 className="font-serif text-3xl leading-tight text-[#f4e4c8] mb-6">Hva skal du hete i listene dine?</h1>
+      <TextField label="Visningsnavn" icon={<User size={16} />} placeholder="F.eks. Pål Vegard" value={name} onChange={(e) => setName(e.target.value)} />
+      {error && <p className="text-red-300 text-sm mb-3">{error}</p>}
+      <button
+        onClick={save}
+        disabled={busy || !name.trim()}
+        className="w-full bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg"
+      >
+        {busy ? "Lagrer …" : "Fortsett"}
+      </button>
+    </div>
+  );
+}
+
+// ================= Landing (list picker) =================
+
+function Landing({ userId, displayName, onEnter, onSignOut }) {
+  const [mode, setMode] = useState(null); // 'create' | 'join' | null
+  const [myLists, setMyLists] = useState([]);
+  const [loadingLists, setLoadingLists] = useState(true);
+
+  const [listName, setListName] = useState("");
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const [code, setCode] = useState("");
-  const [joinName, setJoinName] = useState("");
+
+  useEffect(() => {
+    fetchMyLists(userId)
+      .then(setMyLists)
+      .catch(() => {})
+      .finally(() => setLoadingLists(false));
+  }, [userId]);
 
   const updateCategory = (i, val) => {
     const next = [...categories];
@@ -314,24 +529,22 @@ function Landing({ onEnter }) {
   const removeCategory = (i) => setCategories(categories.filter((_, idx) => idx !== i));
 
   const handleCreate = async () => {
-    if (!listName.trim() || !yourName.trim()) return;
+    if (!listName.trim()) return;
     const cleanCats = categories.map((c) => c.trim()).filter(Boolean);
     if (!cleanCats.length) return;
     setBusy(true);
     setError("");
     try {
-      const list = await createList(listName.trim(), cleanCats);
-      await ensureMember(list.id, yourName.trim());
-      saveMyList({ id: list.id, code: list.code, name: list.name, myName: yourName.trim() });
-      onEnter(list.id, yourName.trim());
+      const list = await createList(listName.trim(), cleanCats, userId);
+      onEnter(list.id);
     } catch (e) {
-      setError("Klarte ikke opprette listen. Sjekk Supabase-oppsettet.");
+      setError("Klarte ikke opprette listen.");
     }
     setBusy(false);
   };
 
   const handleJoin = async () => {
-    if (!code.trim() || !joinName.trim()) return;
+    if (!code.trim()) return;
     setBusy(true);
     setError("");
     try {
@@ -341,9 +554,8 @@ function Landing({ onEnter }) {
         setBusy(false);
         return;
       }
-      await ensureMember(list.id, joinName.trim());
-      saveMyList({ id: list.id, code: list.code, name: list.name, myName: joinName.trim() });
-      onEnter(list.id, joinName.trim());
+      await joinList(list.id, userId);
+      onEnter(list.id);
     } catch (e) {
       setError("Noe gikk galt. Prøv igjen.");
     }
@@ -351,33 +563,34 @@ function Landing({ onEnter }) {
   };
 
   return (
-    <div
-      className="min-h-screen bg-[#2a0c0f] text-[#f4e4c8] px-6 pb-10"
-      style={{ paddingTop: "max(3.5rem, calc(env(safe-area-inset-top) + 2rem))" }}
-    >
-      <p className="text-[11px] uppercase tracking-[0.3em] text-[#d4a24e] mb-2 flex items-center gap-1.5">
-        <Utensils size={12} /> Restaurantlister
-      </p>
-      <h1 className="font-serif text-4xl leading-tight text-[#f4e4c8] mb-2">
-        Steder dere har<br />spist godt.
+    <div className="min-h-screen bg-[#2a0c0f] text-[#f4e4c8] px-6 pb-10" style={SAFE_TOP_TALL}>
+      <GlobalStyle />
+      <div className="flex items-start justify-between mb-2">
+        <p className="text-[11px] uppercase tracking-[0.3em] text-[#d4a24e] flex items-center gap-1.5">
+          <Utensils size={12} /> Restaurantlister
+        </p>
+        <button onClick={onSignOut} className="text-[#c9a876] flex items-center gap-1 text-xs">
+          <LogOut size={13} /> Logg ut
+        </button>
+      </div>
+      <h1 className="font-serif text-4xl leading-tight text-[#f4e4c8] mb-1">
+        Hei, {displayName}.
       </h1>
-      <p className="text-sm text-[#c9a876] mb-8">
-        Lag en liste for kjæresten, kompisgjengen eller familien — hver liste har egen kode og egne kategorier.
-      </p>
+      <p className="text-sm text-[#c9a876] mb-8">Lag en liste eller bli med i en du har fått kode til.</p>
 
-      {myLists.length > 0 && !mode && (
+      {!loadingLists && myLists.length > 0 && !mode && (
         <div className="mb-8">
           <p className="text-xs uppercase tracking-widest text-[#8a6a5a] mb-2">Dine lister</p>
           <div className="space-y-2">
             {myLists.map((l) => (
               <button
-                key={l.code}
-                onClick={() => onEnter(l.id, l.myName)}
+                key={l.id}
+                onClick={() => onEnter(l.id)}
                 className="w-full text-left bg-[#3a1014] rounded-xl px-4 py-3.5 border border-[#d4a24e]/15 flex items-center justify-between"
               >
                 <div>
                   <p className="font-serif text-lg text-[#f4e4c8]">{l.name}</p>
-                  <p className="text-xs text-[#8a6a5a]">som {l.myName} · kode {l.code}</p>
+                  <p className="text-xs text-[#8a6a5a]">kode {l.code}</p>
                 </div>
                 <span className="text-[#d4a24e]">→</span>
               </button>
@@ -409,7 +622,6 @@ function Landing({ onEnter }) {
             <ArrowLeft size={15} /> Tilbake
           </button>
           <TextField label="Navn på liste" placeholder="F.eks. Kompisgjengen" value={listName} onChange={(e) => setListName(e.target.value)} />
-          <TextField label="Ditt navn" placeholder="F.eks. Pål Vegard" value={yourName} onChange={(e) => setYourName(e.target.value)} />
 
           <div className="mb-6">
             <label className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold block mb-2">
@@ -440,7 +652,7 @@ function Landing({ onEnter }) {
 
           <button
             onClick={handleCreate}
-            disabled={busy || !listName.trim() || !yourName.trim()}
+            disabled={busy || !listName.trim()}
             className="w-full bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg"
           >
             {busy ? "Oppretter …" : "Opprett liste"}
@@ -460,73 +672,54 @@ function Landing({ onEnter }) {
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             style={{ letterSpacing: "0.15em" }}
           />
-          <TextField label="Ditt navn" placeholder="F.eks. Kristian" value={joinName} onChange={(e) => setJoinName(e.target.value)} />
-
           {error && <p className="text-red-300 text-sm mb-3">{error}</p>}
-
           <button
             onClick={handleJoin}
-            disabled={busy || !code.trim() || !joinName.trim()}
+            disabled={busy || !code.trim()}
             className="w-full bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg"
           >
             {busy ? "Blir med …" : "Bli med i listen"}
           </button>
         </div>
       )}
-
-      {!configured && (
-        <p className="text-xs text-[#8a6a5a] mt-8 text-center">
-          Lokal test-modus — koble til Supabase for ekte deling mellom telefoner.
-        </p>
-      )}
     </div>
   );
 }
 
-// ---------- Add / edit restaurant form ----------
-// If editRestaurant is passed, form is in edit mode: name/place can be
-// corrected by anyone, but only the current user's own ratings can be changed.
-function AddForm({ list, members, myName, editRestaurant, onAdd, onEdit, onClose }) {
+// ================= Add / edit restaurant =================
+// Ratings entered here always belong to the logged-in user.
+function AddForm({ list, editRestaurant, userId, onAdd, onEdit, onClose }) {
   const isEdit = Boolean(editRestaurant);
   const [name, setName] = useState(editRestaurant?.name || "");
   const [place, setPlace] = useState(editRestaurant?.place || "");
-  const [activeMember, setActiveMember] = useState(myName);
-  const [ratings, setRatings] = useState(() => {
+  const [scores, setScores] = useState(() => {
     const init = {};
-    members.forEach((m) => {
-      init[m.name] = {};
-      list.categories.forEach((c) => {
-        init[m.name][c] = editRestaurant?.ratings?.[m.name]?.[c] ?? 7;
-      });
+    list.categories.forEach((c) => {
+      init[c] = editRestaurant?.ratings?.[userId]?.[c] ?? 7;
     });
     return init;
   });
+  const [busy, setBusy] = useState(false);
 
-  const setR = (member, cat, val) =>
-    setRatings((prev) => ({ ...prev, [member]: { ...prev[member], [cat]: val } }));
+  const setScore = (cat, val) => setScores((prev) => ({ ...prev, [cat]: val }));
 
-  const submit = () => {
+  const submit = async () => {
     if (!name.trim()) return;
+    setBusy(true);
     if (isEdit) {
-      onEdit(editRestaurant.id, name.trim(), place.trim(), ratings);
-      onClose();
-      return;
+      await onEdit(editRestaurant.id, name.trim(), place.trim(), scores);
+    } else {
+      await onAdd(name.trim(), place.trim(), scores);
     }
-    onAdd(name.trim(), place.trim(), ratings);
+    setBusy(false);
     onClose();
   };
 
   return (
-    <Modal
-      title={isEdit ? "Rediger restaurant" : "Legg til restaurant"}
-      eyebrow={isEdit ? "Rediger besøk" : "Nytt besøk"}
-      onClose={onClose}
-    >
+    <Modal title={isEdit ? "Rediger restaurant" : "Legg til restaurant"} eyebrow={isEdit ? "Rediger besøk" : "Nytt besøk"} onClose={onClose}>
       <TextField label="Navn" placeholder="F.eks. Trattoria Popolare" value={name} onChange={(e) => setName(e.target.value)} />
       <div className="mb-6">
-        <label className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold block mb-1.5">
-          Sted (valgfritt)
-        </label>
+        <label className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold block mb-1.5">Sted (valgfritt)</label>
         <div className="relative">
           <MapPin size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8a6a5a]" />
           <input
@@ -538,61 +731,17 @@ function AddForm({ list, members, myName, editRestaurant, onAdd, onEdit, onClose
         </div>
       </div>
 
-      {isEdit ? (
-        <p className="text-sm text-[#c9a876] mb-5">
-          Vurderingene under er dine egne, som {myName}. De andres tall påvirkes ikke.
-        </p>
-      ) : (
-        <div className="flex gap-2 mb-5 bg-[#2a0c0f] p-1 rounded-lg overflow-x-auto">
-          {members.map((m) => (
-            <button
-              key={m.name}
-              onClick={() => setActiveMember(m.name)}
-              className={`shrink-0 px-4 py-2 rounded-md text-sm font-semibold tracking-wide transition-colors ${
-                activeMember === m.name ? "bg-[#d4a24e] text-[#2a0c0f]" : "text-[#c9a876]"
-              }`}
-            >
-              {m.name}
-            </button>
-          ))}
-        </div>
-      )}
-
+      <p className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold mb-3">Dine vurderinger</p>
       {list.categories.map((c) => (
-        <RatingSlider
-          key={c}
-          label={c}
-          value={ratings[activeMember]?.[c] ?? 7}
-          onChange={(v) => setR(activeMember, c, v)}
-        />
+        <RatingSlider key={c} label={c} value={scores[c] ?? 7} onChange={(v) => setScore(c, v)} />
       ))}
 
       <button
         onClick={submit}
-        disabled={!name.trim()}
+        disabled={busy || !name.trim()}
         className="w-full mt-4 bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg hover:bg-[#e0b060] transition-colors"
       >
-        {isEdit ? "Lagre endringer" : "Lagre besøk"}
-      </button>
-    </Modal>
-  );
-}
-
-function RenameModal({ title, eyebrow, label, initialValue, onSave, onClose }) {
-  const [value, setValue] = useState(initialValue);
-  return (
-    <Modal title={title} eyebrow={eyebrow} onClose={onClose}>
-      <TextField label={label} value={value} onChange={(e) => setValue(e.target.value)} />
-      <button
-        onClick={() => {
-          if (!value.trim()) return;
-          onSave(value.trim());
-          onClose();
-        }}
-        disabled={!value.trim()}
-        className="w-full mt-1 bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg"
-      >
-        Lagre
+        {busy ? "Lagrer …" : isEdit ? "Lagre endringer" : "Lagre besøk"}
       </button>
     </Modal>
   );
@@ -610,7 +759,7 @@ function ShareModal({ list, onClose }) {
   return (
     <Modal title="Del listen" eyebrow="Invitasjonskode" onClose={onClose}>
       <p className="text-sm text-[#c9a876] mb-5">
-        Gi denne koden til de du vil skal bli med. De trykker "Bli med i liste" og skriver den inn.
+        Gi denne koden til de du vil skal bli med. De oppretter konto eller logger inn, trykker "Bli med i liste" og skriver den inn.
       </p>
       <div className="bg-[#2a0c0f] border border-[#d4a24e]/30 rounded-xl py-6 text-center mb-4">
         <p className="font-serif text-4xl tracking-[0.2em] text-[#d4a24e]">{list.code}</p>
@@ -626,8 +775,9 @@ function ShareModal({ list, onClose }) {
   );
 }
 
-// ---------- List view ----------
-function ListView({ listId, myName, onBack }) {
+// ================= List view =================
+
+function ListView({ listId, userId, myName, onBack }) {
   const [list, setList] = useState(null);
   const [members, setMembers] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
@@ -635,17 +785,13 @@ function ListView({ listId, myName, onBack }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [expanded, setExpanded] = useState(null);
-  const [editing, setEditing] = useState(null); // restaurant being edited, or null
-  const [detailMember, setDetailMember] = useState(null); // which member's breakdown is shown, per expanded card
+  const [editing, setEditing] = useState(null);
+  const [detailMember, setDetailMember] = useState(null);
   const [renamingList, setRenamingList] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const refresh = async () => {
-    const [l, m, r] = await Promise.all([
-      getList(listId),
-      getMembers(listId),
-      getRestaurants(listId),
-    ]);
+    const [l, m, r] = await Promise.all([getList(listId), getListMembers(listId), getRestaurants(listId)]);
     setList(l);
     setMembers(m);
     setRestaurants(r);
@@ -662,32 +808,26 @@ function ListView({ listId, myName, onBack }) {
     refresh();
   }, [listId]);
 
-  const handleAdd = async (name, place, ratings) => {
-    const row = await addRestaurantRow(listId, name, place, ratings);
+  const handleAdd = async (name, place, scores) => {
+    const row = await addRestaurantRow(listId, name, place, { [userId]: scores });
     setRestaurants((prev) => [row, ...prev]);
   };
 
-  const handleEdit = async (restaurantId, name, place, ratings) => {
+  const handleEdit = async (restaurantId, name, place, scores) => {
     await updateRestaurantInfo(restaurantId, name, place);
-    const updated = await updateRestaurantRatings(restaurantId, ratings);
-    setRestaurants((prev) =>
-      prev.map((r) =>
-        r.id === restaurantId ? { ...r, name, place, ratings: updated?.ratings ?? ratings } : r
-      )
-    );
+    const updated = await updateMyRatings(restaurantId, userId, scores);
+    setRestaurants((prev) => prev.map((r) => (r.id === restaurantId ? updated : r)));
   };
 
   const handleRenameList = async (newName) => {
-    await updateListName(listId, newName);
-    setList((prev) => ({ ...prev, name: newName }));
-    // keep the local "my lists" shortcut in sync
-    const stored = getMyLists().map((l) => (l.id === listId ? { ...l, name: newName } : l));
-    localStorage.setItem("rl_my_lists", JSON.stringify(stored));
+    const updated = await updateListName(listId, newName);
+    setList(updated);
   };
 
   if (loading || !list) {
     return (
       <div className="min-h-screen bg-[#2a0c0f] flex items-center justify-center">
+        <GlobalStyle />
         <p className="text-[#8a6a5a]">Laster liste …</p>
       </div>
     );
@@ -697,35 +837,16 @@ function ListView({ listId, myName, onBack }) {
 
   return (
     <div className="min-h-screen bg-[#2a0c0f] text-[#f4e4c8]">
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap');
-        .font-serif { font-family: 'Fraunces', serif; }
-        body { font-family: 'Inter', sans-serif; }
-        input[type=range]::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          width: 18px; height: 18px;
-          border-radius: 50%;
-          background: #f4e4c8;
-          border: 2px solid #d4a24e;
-          cursor: pointer;
-        }
-      `}</style>
+      <GlobalStyle />
 
-      <div
-        className="px-6 pb-6 relative overflow-hidden"
-        style={{ paddingTop: "max(2.5rem, calc(env(safe-area-inset-top) + 1.25rem))" }}
-      >
+      <div className="px-6 pb-6 relative overflow-hidden" style={SAFE_TOP}>
         <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-[#d4a24e]/10 blur-2xl" />
         <div className="flex items-center justify-between mb-4">
           <button onClick={onBack} className="text-[#c9a876] flex items-center gap-1 text-sm">
             <ArrowLeft size={15} /> Mine lister
           </button>
           <div className="flex items-center gap-4">
-            <button
-              onClick={handleRefresh}
-              className="text-[#c9a876] flex items-center gap-1 text-sm"
-              aria-label="Oppdater"
-            >
+            <button onClick={handleRefresh} className="text-[#c9a876] flex items-center gap-1 text-sm" aria-label="Oppdater">
               <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
             </button>
             <button onClick={() => setShowShare(true)} className="text-[#d4a24e] flex items-center gap-1 text-sm font-semibold">
@@ -740,7 +861,9 @@ function ListView({ listId, myName, onBack }) {
           <Utensils size={12} /> {list.name} <Pencil size={11} className="opacity-60" />
         </button>
         <h1 className="font-serif text-3xl leading-tight text-[#f4e4c8]">
-          Steder dere har<br />spist godt.
+          Steder dere har
+          <br />
+          spist godt.
         </h1>
         <div className="flex items-center gap-2 mt-3 text-xs text-[#c9a876]">
           <Users size={13} />
@@ -771,9 +894,7 @@ function ListView({ listId, myName, onBack }) {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
-                      <span className="font-serif text-lg text-[#d4a24e]/50 pt-0.5 w-6 shrink-0 text-right">
-                        {i + 1}
-                      </span>
+                      <span className="font-serif text-lg text-[#d4a24e]/50 pt-0.5 w-6 shrink-0 text-right">{i + 1}</span>
                       <div className="min-w-0">
                         <h3 className="font-serif text-xl text-[#f4e4c8] truncate">{r.name}</h3>
                         {r.place && (
@@ -788,9 +909,7 @@ function ListView({ listId, myName, onBack }) {
                         <Star size={14} fill="#d4a24e" strokeWidth={0} />
                         <span className="font-serif text-2xl leading-none">{avg.toFixed(1)}</span>
                       </div>
-                      <span className="text-[9px] uppercase tracking-widest text-[#8a6a5a] mt-1">
-                        snitt
-                      </span>
+                      <span className="text-[9px] uppercase tracking-widest text-[#8a6a5a] mt-1">snitt</span>
                     </div>
                   </div>
 
@@ -799,28 +918,26 @@ function ListView({ listId, myName, onBack }) {
                       <div className="flex flex-wrap justify-around gap-y-3 mb-4">
                         {members.map((m) => (
                           <button
-                            key={m.name}
+                            key={m.userId}
                             onClick={(e) => {
                               e.stopPropagation();
-                              setDetailMember(detailMember === m.name ? null : m.name);
+                              setDetailMember(detailMember === m.userId ? null : m.userId);
                             }}
                             className={`rounded-xl transition-opacity ${
-                              detailMember && detailMember !== m.name ? "opacity-40" : ""
+                              detailMember && detailMember !== m.userId ? "opacity-40" : ""
                             }`}
                           >
-                            <Stamp initial={initials(m.name)} value={personAvg(r, m.name)} />
+                            <Stamp initial={initials(m.name)} value={personAvg(r, m.userId)} />
                           </button>
                         ))}
                       </div>
 
                       <p className="text-[9px] uppercase tracking-widest text-[#8a6a5a] mb-2 text-center">
-                        {detailMember ? `${detailMember}s vurdering` : "Snitt for gruppen"}
+                        {detailMember ? `${members.find((m) => m.userId === detailMember)?.name}s vurdering` : "Snitt for gruppen"}
                       </p>
-                      <div className={`grid gap-2`} style={{ gridTemplateColumns: `repeat(${list.categories.length}, minmax(0,1fr))` }}>
+                      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${list.categories.length}, minmax(0,1fr))` }}>
                         {list.categories.map((c) => {
-                          const v = detailMember
-                            ? (r.ratings || {})[detailMember]?.[c] ?? null
-                            : categoryAvg(r, c);
+                          const v = detailMember ? (r.ratings || {})[detailMember]?.[c] ?? null : categoryAvg(r, c);
                           return (
                             <div key={c} className="text-center bg-[#2a0c0f] rounded-lg py-2">
                               <p className="text-[9px] uppercase tracking-widest text-[#8a6a5a] mb-1">{c}</p>
@@ -850,23 +967,14 @@ function ListView({ listId, myName, onBack }) {
       <button
         onClick={() => setShowAdd(true)}
         className="fixed right-6 w-14 h-14 rounded-full bg-[#d4a24e] text-[#2a0c0f] shadow-lg shadow-black/40 flex items-center justify-center active:scale-95 transition-transform"
-        style={{ bottom: "max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem))" }}
+        style={SAFE_BOTTOM}
       >
         <Plus size={26} strokeWidth={2.5} />
       </button>
 
-      {showAdd && (
-        <AddForm list={list} members={members} myName={myName} onAdd={handleAdd} onClose={() => setShowAdd(false)} />
-      )}
+      {showAdd && <AddForm list={list} userId={userId} onAdd={handleAdd} onClose={() => setShowAdd(false)} />}
       {editing && (
-        <AddForm
-          list={list}
-          members={members}
-          myName={myName}
-          editRestaurant={editing}
-          onEdit={handleEdit}
-          onClose={() => setEditing(null)}
-        />
+        <AddForm list={list} userId={userId} editRestaurant={editing} onEdit={handleEdit} onClose={() => setEditing(null)} />
       )}
       {showShare && <ShareModal list={list} onClose={() => setShowShare(false)} />}
       {renamingList && (
@@ -883,13 +991,73 @@ function ListView({ listId, myName, onBack }) {
   );
 }
 
-// ---------- Root ----------
-export default function App() {
-  const [active, setActive] = useState(null); // { listId, myName }
+// ================= Root =================
 
-  if (!active) {
-    return <Landing onEnter={(listId, myName) => setActive({ listId, myName })} />;
+export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = loading, null = signed out
+  const [profile, setProfile] = useState(undefined);
+  const [active, setActive] = useState(null); // listId or null
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (!newSession) {
+        setProfile(undefined);
+        setActive(null);
+      }
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (session === null || session === undefined) return;
+    fetchProfile(session.user.id)
+      .then(setProfile)
+      .catch(() => setProfile(null));
+  }, [session]);
+
+  if (session === undefined) {
+    return (
+      <div className="min-h-screen bg-[#2a0c0f] flex items-center justify-center">
+        <GlobalStyle />
+        <p className="text-[#8a6a5a]">Laster …</p>
+      </div>
+    );
   }
 
-  return <ListView listId={active.listId} myName={active.myName} onBack={() => setActive(null)} />;
+  if (!session) return <AuthScreen />;
+
+  if (profile === undefined) {
+    return (
+      <div className="min-h-screen bg-[#2a0c0f] flex items-center justify-center">
+        <GlobalStyle />
+        <p className="text-[#8a6a5a]">Laster …</p>
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return <ProfileSetup userId={session.user.id} onDone={setProfile} />;
+  }
+
+  if (!active) {
+    return (
+      <Landing
+        userId={session.user.id}
+        displayName={profile.display_name}
+        onEnter={(listId) => setActive(listId)}
+        onSignOut={() => supabase.auth.signOut()}
+      />
+    );
+  }
+
+  return (
+    <ListView
+      listId={active}
+      userId={session.user.id}
+      myName={profile.display_name}
+      onBack={() => setActive(null)}
+    />
+  );
 }
