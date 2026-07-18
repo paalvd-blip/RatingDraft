@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, X, MapPin, Utensils, Users, Sparkles, Star, ArrowLeft, Share2, Check } from "lucide-react";
+import { Plus, X, MapPin, Utensils, Users, Sparkles, Star, ArrowLeft, Share2, Check, RefreshCw, Pencil } from "lucide-react";
 
 // ---- Supabase config ----
 // Fyll inn disse to etter du har opprettet et gratis prosjekt på supabase.com
@@ -131,6 +131,37 @@ async function updateRestaurantRatings(restaurantId, ratings) {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify({ ratings }),
+  });
+  return row;
+}
+
+async function updateRestaurantInfo(restaurantId, name, place) {
+  if (!configured) {
+    const row = memoryDB.restaurants.find((r) => r.id === restaurantId);
+    if (row) {
+      row.name = name;
+      row.place = place;
+    }
+    return row;
+  }
+  const [row] = await sb(`restaurants?id=eq.${restaurantId}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ name, place }),
+  });
+  return row;
+}
+
+async function updateListName(listId, name) {
+  if (!configured) {
+    const row = memoryDB.lists.find((l) => l.id === listId);
+    if (row) row.name = name;
+    return row;
+  }
+  const [row] = await sb(`lists?id=eq.${listId}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ name }),
   });
   return row;
 }
@@ -320,7 +351,10 @@ function Landing({ onEnter }) {
   };
 
   return (
-    <div className="min-h-screen bg-[#2a0c0f] text-[#f4e4c8] px-6 pt-14 pb-10">
+    <div
+      className="min-h-screen bg-[#2a0c0f] text-[#f4e4c8] px-6 pb-10"
+      style={{ paddingTop: "max(3.5rem, calc(env(safe-area-inset-top) + 2rem))" }}
+    >
       <p className="text-[11px] uppercase tracking-[0.3em] text-[#d4a24e] mb-2 flex items-center gap-1.5">
         <Utensils size={12} /> Restaurantlister
       </p>
@@ -450,8 +484,8 @@ function Landing({ onEnter }) {
 }
 
 // ---------- Add / edit restaurant form ----------
-// If editRestaurant is passed, form is in edit mode: name/place locked,
-// only the current user's own ratings can be changed.
+// If editRestaurant is passed, form is in edit mode: name/place can be
+// corrected by anyone, but only the current user's own ratings can be changed.
 function AddForm({ list, members, myName, editRestaurant, onAdd, onEdit, onClose }) {
   const isEdit = Boolean(editRestaurant);
   const [name, setName] = useState(editRestaurant?.name || "");
@@ -472,45 +506,41 @@ function AddForm({ list, members, myName, editRestaurant, onAdd, onEdit, onClose
     setRatings((prev) => ({ ...prev, [member]: { ...prev[member], [cat]: val } }));
 
   const submit = () => {
+    if (!name.trim()) return;
     if (isEdit) {
-      onEdit(editRestaurant.id, ratings);
+      onEdit(editRestaurant.id, name.trim(), place.trim(), ratings);
       onClose();
       return;
     }
-    if (!name.trim()) return;
     onAdd(name.trim(), place.trim(), ratings);
     onClose();
   };
 
   return (
     <Modal
-      title={isEdit ? editRestaurant.name : "Legg til restaurant"}
-      eyebrow={isEdit ? "Rediger dine vurderinger" : "Nytt besøk"}
+      title={isEdit ? "Rediger restaurant" : "Legg til restaurant"}
+      eyebrow={isEdit ? "Rediger besøk" : "Nytt besøk"}
       onClose={onClose}
     >
-      {!isEdit && (
-        <>
-          <TextField label="Navn" placeholder="F.eks. Trattoria Popolare" value={name} onChange={(e) => setName(e.target.value)} />
-          <div className="mb-6">
-            <label className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold block mb-1.5">
-              Sted (valgfritt)
-            </label>
-            <div className="relative">
-              <MapPin size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8a6a5a]" />
-              <input
-                value={place}
-                onChange={(e) => setPlace(e.target.value)}
-                placeholder="By eller bydel"
-                className="w-full bg-[#2a0c0f] border border-[#d4a24e]/30 rounded-lg pl-9 pr-4 py-2.5 text-[#f4e4c8] placeholder-[#8a6a5a] focus:outline-none focus:border-[#d4a24e]"
-              />
-            </div>
-          </div>
-        </>
-      )}
+      <TextField label="Navn" placeholder="F.eks. Trattoria Popolare" value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="mb-6">
+        <label className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold block mb-1.5">
+          Sted (valgfritt)
+        </label>
+        <div className="relative">
+          <MapPin size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8a6a5a]" />
+          <input
+            value={place}
+            onChange={(e) => setPlace(e.target.value)}
+            placeholder="By eller bydel"
+            className="w-full bg-[#2a0c0f] border border-[#d4a24e]/30 rounded-lg pl-9 pr-4 py-2.5 text-[#f4e4c8] placeholder-[#8a6a5a] focus:outline-none focus:border-[#d4a24e]"
+          />
+        </div>
+      </div>
 
       {isEdit ? (
         <p className="text-sm text-[#c9a876] mb-5">
-          Du endrer kun dine egne vurderinger, som {myName}. De andres tall påvirkes ikke.
+          Vurderingene under er dine egne, som {myName}. De andres tall påvirkes ikke.
         </p>
       ) : (
         <div className="flex gap-2 mb-5 bg-[#2a0c0f] p-1 rounded-lg overflow-x-auto">
@@ -539,10 +569,30 @@ function AddForm({ list, members, myName, editRestaurant, onAdd, onEdit, onClose
 
       <button
         onClick={submit}
-        disabled={!isEdit && !name.trim()}
+        disabled={!name.trim()}
         className="w-full mt-4 bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg hover:bg-[#e0b060] transition-colors"
       >
         {isEdit ? "Lagre endringer" : "Lagre besøk"}
+      </button>
+    </Modal>
+  );
+}
+
+function RenameModal({ title, eyebrow, label, initialValue, onSave, onClose }) {
+  const [value, setValue] = useState(initialValue);
+  return (
+    <Modal title={title} eyebrow={eyebrow} onClose={onClose}>
+      <TextField label={label} value={value} onChange={(e) => setValue(e.target.value)} />
+      <button
+        onClick={() => {
+          if (!value.trim()) return;
+          onSave(value.trim());
+          onClose();
+        }}
+        disabled={!value.trim()}
+        className="w-full mt-1 bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg"
+      >
+        Lagre
       </button>
     </Modal>
   );
@@ -586,6 +636,9 @@ function ListView({ listId, myName, onBack }) {
   const [showShare, setShowShare] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [editing, setEditing] = useState(null); // restaurant being edited, or null
+  const [detailMember, setDetailMember] = useState(null); // which member's breakdown is shown, per expanded card
+  const [renamingList, setRenamingList] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const refresh = async () => {
     const [l, m, r] = await Promise.all([
@@ -599,6 +652,12 @@ function ListView({ listId, myName, onBack }) {
     setLoading(false);
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await refresh();
+    setRefreshing(false);
+  };
+
   useEffect(() => {
     refresh();
   }, [listId]);
@@ -608,11 +667,22 @@ function ListView({ listId, myName, onBack }) {
     setRestaurants((prev) => [row, ...prev]);
   };
 
-  const handleEdit = async (restaurantId, ratings) => {
+  const handleEdit = async (restaurantId, name, place, ratings) => {
+    await updateRestaurantInfo(restaurantId, name, place);
     const updated = await updateRestaurantRatings(restaurantId, ratings);
     setRestaurants((prev) =>
-      prev.map((r) => (r.id === restaurantId ? { ...r, ratings: updated?.ratings ?? ratings } : r))
+      prev.map((r) =>
+        r.id === restaurantId ? { ...r, name, place, ratings: updated?.ratings ?? ratings } : r
+      )
     );
+  };
+
+  const handleRenameList = async (newName) => {
+    await updateListName(listId, newName);
+    setList((prev) => ({ ...prev, name: newName }));
+    // keep the local "my lists" shortcut in sync
+    const stored = getMyLists().map((l) => (l.id === listId ? { ...l, name: newName } : l));
+    localStorage.setItem("rl_my_lists", JSON.stringify(stored));
   };
 
   if (loading || !list) {
@@ -641,19 +711,34 @@ function ListView({ listId, myName, onBack }) {
         }
       `}</style>
 
-      <div className="px-6 pt-8 pb-6 relative overflow-hidden">
+      <div
+        className="px-6 pb-6 relative overflow-hidden"
+        style={{ paddingTop: "max(2.5rem, calc(env(safe-area-inset-top) + 1.25rem))" }}
+      >
         <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-[#d4a24e]/10 blur-2xl" />
         <div className="flex items-center justify-between mb-4">
           <button onClick={onBack} className="text-[#c9a876] flex items-center gap-1 text-sm">
             <ArrowLeft size={15} /> Mine lister
           </button>
-          <button onClick={() => setShowShare(true)} className="text-[#d4a24e] flex items-center gap-1 text-sm font-semibold">
-            <Share2 size={14} /> Del
-          </button>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={handleRefresh}
+              className="text-[#c9a876] flex items-center gap-1 text-sm"
+              aria-label="Oppdater"
+            >
+              <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+            </button>
+            <button onClick={() => setShowShare(true)} className="text-[#d4a24e] flex items-center gap-1 text-sm font-semibold">
+              <Share2 size={14} /> Del
+            </button>
+          </div>
         </div>
-        <p className="text-[11px] uppercase tracking-[0.3em] text-[#d4a24e] mb-2 flex items-center gap-1.5">
-          <Utensils size={12} /> {list.name}
-        </p>
+        <button
+          onClick={() => setRenamingList(true)}
+          className="text-[11px] uppercase tracking-[0.3em] text-[#d4a24e] mb-2 flex items-center gap-1.5"
+        >
+          <Utensils size={12} /> {list.name} <Pencil size={11} className="opacity-60" />
+        </button>
         <h1 className="font-serif text-3xl leading-tight text-[#f4e4c8]">
           Steder dere har<br />spist godt.
         </h1>
@@ -678,7 +763,10 @@ function ListView({ listId, myName, onBack }) {
               return (
                 <div
                   key={r.id}
-                  onClick={() => setExpanded(isOpen ? null : r.id)}
+                  onClick={() => {
+                    setExpanded(isOpen ? null : r.id);
+                    setDetailMember(null);
+                  }}
                   className="bg-[#3a1014] rounded-2xl px-5 py-4 border border-[#d4a24e]/15 active:scale-[0.99] transition-transform cursor-pointer"
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -710,16 +798,33 @@ function ListView({ listId, myName, onBack }) {
                     <div className="mt-4 pt-4 border-t border-[#d4a24e]/15">
                       <div className="flex flex-wrap justify-around gap-y-3 mb-4">
                         {members.map((m) => (
-                          <Stamp key={m.name} initial={initials(m.name)} value={personAvg(r, m.name)} />
+                          <button
+                            key={m.name}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDetailMember(detailMember === m.name ? null : m.name);
+                            }}
+                            className={`rounded-xl transition-opacity ${
+                              detailMember && detailMember !== m.name ? "opacity-40" : ""
+                            }`}
+                          >
+                            <Stamp initial={initials(m.name)} value={personAvg(r, m.name)} />
+                          </button>
                         ))}
                       </div>
+
+                      <p className="text-[9px] uppercase tracking-widest text-[#8a6a5a] mb-2 text-center">
+                        {detailMember ? `${detailMember}s vurdering` : "Snitt for gruppen"}
+                      </p>
                       <div className={`grid gap-2`} style={{ gridTemplateColumns: `repeat(${list.categories.length}, minmax(0,1fr))` }}>
                         {list.categories.map((c) => {
-                          const v = categoryAvg(r, c);
+                          const v = detailMember
+                            ? (r.ratings || {})[detailMember]?.[c] ?? null
+                            : categoryAvg(r, c);
                           return (
                             <div key={c} className="text-center bg-[#2a0c0f] rounded-lg py-2">
                               <p className="text-[9px] uppercase tracking-widest text-[#8a6a5a] mb-1">{c}</p>
-                              <p className="font-serif text-sm text-[#f4e4c8]">{v === null ? "–" : v.toFixed(1)}</p>
+                              <p className="font-serif text-sm text-[#f4e4c8]">{v === null || v === undefined ? "–" : v.toFixed(1)}</p>
                             </div>
                           );
                         })}
@@ -731,7 +836,7 @@ function ListView({ listId, myName, onBack }) {
                         }}
                         className="w-full mt-3 text-[#d4a24e] border border-[#d4a24e]/30 text-xs font-semibold uppercase tracking-widest py-2.5 rounded-lg"
                       >
-                        Rediger mine vurderinger
+                        Rediger sted og mine vurderinger
                       </button>
                     </div>
                   )}
@@ -744,7 +849,8 @@ function ListView({ listId, myName, onBack }) {
 
       <button
         onClick={() => setShowAdd(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-[#d4a24e] text-[#2a0c0f] shadow-lg shadow-black/40 flex items-center justify-center active:scale-95 transition-transform"
+        className="fixed right-6 w-14 h-14 rounded-full bg-[#d4a24e] text-[#2a0c0f] shadow-lg shadow-black/40 flex items-center justify-center active:scale-95 transition-transform"
+        style={{ bottom: "max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem))" }}
       >
         <Plus size={26} strokeWidth={2.5} />
       </button>
@@ -763,6 +869,16 @@ function ListView({ listId, myName, onBack }) {
         />
       )}
       {showShare && <ShareModal list={list} onClose={() => setShowShare(false)} />}
+      {renamingList && (
+        <RenameModal
+          title="Gi listen nytt navn"
+          eyebrow="Rediger liste"
+          label="Navn på liste"
+          initialValue={list.name}
+          onSave={handleRenameList}
+          onClose={() => setRenamingList(false)}
+        />
+      )}
     </div>
   );
 }
