@@ -218,6 +218,14 @@ function initials(name) {
   return (name || "?").trim().slice(0, 2).toUpperCase();
 }
 
+// 'unrated' | 'skipped' | 'rated' — status of the logged-in user's own entry for a restaurant
+function getMyStatus(r, userId) {
+  const entry = (r.ratings || {})[userId];
+  if (!entry) return "unrated";
+  if (entry.skipped) return "skipped";
+  return "rated";
+}
+
 // ================= Shared UI =================
 
 function Stamp({ initial, value }) {
@@ -704,14 +712,16 @@ function Landing({ userId, displayName, onEnter, onSignOut }) {
 
 // ================= Add / edit restaurant =================
 // Ratings entered here always belong to the logged-in user.
-function AddForm({ list, editRestaurant, userId, onAdd, onEdit, onClose }) {
+function AddForm({ list, editRestaurant, userId, quickRateOnly, onAdd, onEdit, onClose }) {
   const isEdit = Boolean(editRestaurant);
   const [name, setName] = useState(editRestaurant?.name || "");
   const [place, setPlace] = useState(editRestaurant?.place || "");
+  const existingMine = editRestaurant?.ratings?.[userId];
+  const [skipped, setSkipped] = useState(Boolean(existingMine?.skipped));
   const [scores, setScores] = useState(() => {
     const init = {};
     list.categories.forEach((c) => {
-      init[c] = editRestaurant?.ratings?.[userId]?.[c] ?? 7;
+      init[c] = existingMine && !existingMine.skipped ? existingMine[c] ?? 7 : 7;
     });
     return init;
   });
@@ -722,42 +732,66 @@ function AddForm({ list, editRestaurant, userId, onAdd, onEdit, onClose }) {
   const submit = async () => {
     if (!name.trim()) return;
     setBusy(true);
+    const payload = skipped ? { skipped: true } : scores;
     if (isEdit) {
-      await onEdit(editRestaurant.id, name.trim(), place.trim(), scores);
+      await onEdit(editRestaurant.id, name.trim(), place.trim(), payload);
     } else {
-      await onAdd(name.trim(), place.trim(), scores);
+      await onAdd(name.trim(), place.trim(), payload);
     }
     setBusy(false);
     onClose();
   };
 
   return (
-    <Modal title={isEdit ? "Rediger restaurant" : "Legg til restaurant"} eyebrow={isEdit ? "Rediger besøk" : "Nytt besøk"} onClose={onClose}>
-      <TextField label="Navn" placeholder="F.eks. Trattoria Popolare" value={name} onChange={(e) => setName(e.target.value)} />
-      <div className="mb-6">
-        <label className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold block mb-1.5">Sted (valgfritt)</label>
-        <div className="relative">
-          <MapPin size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8a6a5a]" />
-          <input
-            value={place}
-            onChange={(e) => setPlace(e.target.value)}
-            placeholder="By eller bydel"
-            className="w-full bg-[#2a0c0f] border border-[#d4a24e]/30 rounded-lg pl-9 pr-4 py-2.5 text-[#f4e4c8] placeholder-[#8a6a5a] focus:outline-none focus:border-[#d4a24e]"
-          />
-        </div>
+    <Modal
+      title={quickRateOnly ? editRestaurant.name : isEdit ? "Rediger restaurant" : "Legg til restaurant"}
+      eyebrow={quickRateOnly ? "Gi din vurdering" : isEdit ? "Rediger besøk" : "Nytt besøk"}
+      onClose={onClose}
+    >
+      {!quickRateOnly && (
+        <>
+          <TextField label="Navn" placeholder="F.eks. Trattoria Popolare" value={name} onChange={(e) => setName(e.target.value)} />
+          <div className="mb-6">
+            <label className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold block mb-1.5">Sted (valgfritt)</label>
+            <div className="relative">
+              <MapPin size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8a6a5a]" />
+              <input
+                value={place}
+                onChange={(e) => setPlace(e.target.value)}
+                placeholder="By eller bydel"
+                className="w-full bg-[#2a0c0f] border border-[#d4a24e]/30 rounded-lg pl-9 pr-4 py-2.5 text-[#f4e4c8] placeholder-[#8a6a5a] focus:outline-none focus:border-[#d4a24e]"
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold">Dine vurderinger</p>
+        <button
+          onClick={() => setSkipped((s) => !s)}
+          className={`text-xs font-semibold uppercase tracking-widest ${
+            skipped ? "text-[#d4a24e]" : "text-[#8a6a5a]"
+          }`}
+        >
+          {skipped ? "✓ Jeg var ikke med" : "Jeg var ikke med"}
+        </button>
       </div>
 
-      <p className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold mb-3">Dine vurderinger</p>
-      {list.categories.map((c) => (
-        <RatingSlider key={c} label={c} value={scores[c] ?? 7} onChange={(v) => setScore(c, v)} />
-      ))}
+      {skipped ? (
+        <p className="text-sm text-[#c9a876] bg-[#2a0c0f] border border-[#d4a24e]/20 rounded-lg px-4 py-3 mb-4">
+          Du blir registrert som "ikke med" på dette besøket, uten noen vurdering. Trykk knappen over igjen for å gi en vurdering i stedet.
+        </p>
+      ) : (
+        list.categories.map((c) => <RatingSlider key={c} label={c} value={scores[c] ?? 7} onChange={(v) => setScore(c, v)} />)
+      )}
 
       <button
         onClick={submit}
         disabled={busy || !name.trim()}
         className="w-full mt-4 bg-[#d4a24e] disabled:opacity-40 text-[#2a0c0f] font-bold uppercase tracking-widest text-sm py-3.5 rounded-lg hover:bg-[#e0b060] transition-colors"
       >
-        {busy ? "Lagrer …" : isEdit ? "Lagre endringer" : "Lagre besøk"}
+        {busy ? "Lagrer …" : skipped ? "Lagre (ikke med)" : isEdit ? "Lagre endringer" : "Lagre besøk"}
       </button>
     </Modal>
   );
@@ -861,6 +895,7 @@ function ListView({ listId, userId, myName, onBack }) {
   const [showShare, setShowShare] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [quickRate, setQuickRate] = useState(null);
   const [detailMember, setDetailMember] = useState(null);
   const [renamingList, setRenamingList] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -1000,15 +1035,30 @@ function ListView({ listId, userId, myName, onBack }) {
             {sorted.map((r, i) => {
               const avg = overallAvg(r);
               const isOpen = expanded === r.id;
+              const myStatus = getMyStatus(r, userId);
               return (
                 <div
                   key={r.id}
                   onClick={() => {
+                    if (myStatus === "unrated") {
+                      setQuickRate(r);
+                      return;
+                    }
                     setExpanded(isOpen ? null : r.id);
                     setDetailMember(null);
                   }}
                   className="bg-[#3a1014] rounded-2xl px-5 py-4 border border-[#d4a24e]/15 active:scale-[0.99] transition-transform cursor-pointer"
                 >
+                  {myStatus === "unrated" && (
+                    <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[#d4a24e] font-semibold mb-2">
+                      <Sparkles size={11} /> Du har ikke vurdert dette ennå — trykk for å gi vurdering
+                    </div>
+                  )}
+                  {myStatus === "skipped" && (
+                    <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[#8a6a5a] mb-2">
+                      Du var ikke med på dette besøket
+                    </div>
+                  )}
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
                       <span className="font-serif text-lg text-[#d4a24e]/50 pt-0.5 w-6 shrink-0 text-right">{i + 1}</span>
@@ -1104,6 +1154,16 @@ function ListView({ listId, userId, myName, onBack }) {
       {showAdd && <AddForm list={list} userId={userId} onAdd={handleAdd} onClose={() => setShowAdd(false)} />}
       {editing && (
         <AddForm list={list} userId={userId} editRestaurant={editing} onEdit={handleEdit} onClose={() => setEditing(null)} />
+      )}
+      {quickRate && (
+        <AddForm
+          list={list}
+          userId={userId}
+          editRestaurant={quickRate}
+          quickRateOnly
+          onEdit={handleEdit}
+          onClose={() => setQuickRate(null)}
+        />
       )}
       {showShare && <ShareModal list={list} onClose={() => setShowShare(false)} />}
       {renamingList && (
