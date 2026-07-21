@@ -952,7 +952,7 @@ function ListView({ listId, userId, myName, onBack }) {
       <GlobalStyle />
 
       <div className="px-6 pb-6 relative overflow-hidden" style={SAFE_TOP}>
-        <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-[#d4a24e]/10 blur-2xl" />
+        <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-[#d4a24e]/10 blur-2xl pointer-events-none" />
         <div className="flex items-center justify-between mb-4">
           <button onClick={onBack} className="text-[#c9a876] flex items-center gap-1 text-sm">
             <ArrowLeft size={15} /> Mine lister
