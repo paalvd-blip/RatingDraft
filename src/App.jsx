@@ -538,7 +538,7 @@ function Landing({ userId, displayName, onEnter, onSignOut }) {
       const list = await createList(listName.trim(), cleanCats, userId);
       onEnter(list.id);
     } catch (e) {
-      setError("Klarte ikke opprette listen.");
+      setError(e?.message ? `Klarte ikke opprette listen: ${e.message}` : "Klarte ikke opprette listen.");
     }
     setBusy(false);
   };
@@ -557,7 +557,7 @@ function Landing({ userId, displayName, onEnter, onSignOut }) {
       await joinList(list.id, userId);
       onEnter(list.id);
     } catch (e) {
-      setError("Noe gikk galt. Prøv igjen.");
+      setError(e?.message ? `Noe gikk galt: ${e.message}` : "Noe gikk galt. Prøv igjen.");
     }
     setBusy(false);
   };
@@ -790,11 +790,18 @@ function ListView({ listId, userId, myName, onBack }) {
   const [renamingList, setRenamingList] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [loadError, setLoadError] = useState("");
+
   const refresh = async () => {
-    const [l, m, r] = await Promise.all([getList(listId), getListMembers(listId), getRestaurants(listId)]);
-    setList(l);
-    setMembers(m);
-    setRestaurants(r);
+    setLoadError("");
+    try {
+      const [l, m, r] = await Promise.all([getList(listId), getListMembers(listId), getRestaurants(listId)]);
+      setList(l);
+      setMembers(m);
+      setRestaurants(r);
+    } catch (e) {
+      setLoadError(e?.message || "Klarte ikke laste listen.");
+    }
     setLoading(false);
   };
 
@@ -824,11 +831,23 @@ function ListView({ listId, userId, myName, onBack }) {
     setList(updated);
   };
 
-  if (loading || !list) {
+  if (loading || (!list && !loadError)) {
     return (
       <div className="min-h-screen bg-[#2a0c0f] flex items-center justify-center">
         <GlobalStyle />
         <p className="text-[#8a6a5a]">Laster liste …</p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-[#2a0c0f] flex flex-col items-center justify-center px-6 text-center">
+        <GlobalStyle />
+        <p className="text-red-300 mb-4">{loadError}</p>
+        <button onClick={onBack} className="text-[#d4a24e] text-sm underline">
+          Tilbake til mine lister
+        </button>
       </div>
     );
   }
