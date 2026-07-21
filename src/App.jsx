@@ -17,6 +17,8 @@ import {
   Mail,
   Lock,
   User,
+  Settings,
+  Trash2,
 } from "lucide-react";
 
 // ---- Supabase config ----
@@ -166,6 +168,21 @@ async function updateListName(listId, name) {
   const { data, error } = await supabase.from("lists").update({ name }).eq("id", listId).select().single();
   if (error) throw error;
   return data;
+}
+
+async function deleteList(listId) {
+  const { error } = await supabase.from("lists").delete().eq("id", listId);
+  if (error) throw error;
+}
+
+async function deleteRestaurant(restaurantId) {
+  const { error } = await supabase.from("restaurants").delete().eq("id", restaurantId);
+  if (error) throw error;
+}
+
+async function removeMember(listId, userId) {
+  const { error } = await supabase.from("list_members").delete().eq("list_id", listId).eq("user_id", userId);
+  if (error) throw error;
 }
 
 // ---------- Rating math ----------
@@ -774,6 +791,65 @@ function ShareModal({ list, onClose }) {
   );
 }
 
+function AdminModal({ list, members, ownerId, onRemoveMember, onDeleteList, onClose }) {
+  const [busyId, setBusyId] = useState(null);
+  const [deletingList, setDeletingList] = useState(false);
+
+  const handleRemove = async (userId, name) => {
+    if (!window.confirm(`Fjerne ${name} fra listen?`)) return;
+    setBusyId(userId);
+    await onRemoveMember(userId);
+    setBusyId(null);
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm(`Slette hele listen "${list.name}"? Dette kan ikke angres, og alle restauranter forsvinner.`)) return;
+    setDeletingList(true);
+    await onDeleteList();
+  };
+
+  return (
+    <Modal title="Administrer liste" eyebrow={list.name} onClose={onClose}>
+      <p className="text-xs uppercase tracking-widest text-[#c9a876] font-semibold mb-3">Medlemmer</p>
+      <div className="space-y-2 mb-6">
+        {members.map((m) => (
+          <div
+            key={m.userId}
+            className="flex items-center justify-between bg-[#2a0c0f] rounded-lg px-4 py-3 border border-[#d4a24e]/15"
+          >
+            <span className="font-serif text-lg text-[#f4e4c8]">
+              {m.name}
+              {m.userId === ownerId && (
+                <span className="ml-2 text-[9px] uppercase tracking-widest text-[#d4a24e] align-middle">Eier</span>
+              )}
+            </span>
+            {m.userId !== ownerId && (
+              <button
+                onClick={() => handleRemove(m.userId, m.name)}
+                disabled={busyId === m.userId}
+                className="text-[#c9a876] p-1 disabled:opacity-40"
+                aria-label={`Fjern ${m.name}`}
+              >
+                <X size={16} />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <p className="text-xs uppercase tracking-widest text-red-300/80 font-semibold mb-3">Faresone</p>
+      <button
+        onClick={handleDelete}
+        disabled={deletingList}
+        className="w-full flex items-center justify-center gap-2 bg-transparent border border-red-400/40 text-red-300 disabled:opacity-40 font-semibold uppercase tracking-widest text-sm py-3.5 rounded-lg"
+      >
+        <Trash2 size={15} />
+        {deletingList ? "Sletter …" : "Slett listen"}
+      </button>
+    </Modal>
+  );
+}
+
 // ================= List view =================
 
 function ListView({ listId, userId, myName, onBack }) {
@@ -788,6 +864,7 @@ function ListView({ listId, userId, myName, onBack }) {
   const [detailMember, setDetailMember] = useState(null);
   const [renamingList, setRenamingList] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
 
   const [loadError, setLoadError] = useState("");
 
@@ -830,6 +907,23 @@ function ListView({ listId, userId, myName, onBack }) {
     setList(updated);
   };
 
+  const handleDeleteRestaurant = async (restaurantId) => {
+    if (!window.confirm("Slette dette restaurantbesøket? Dette kan ikke angres.")) return;
+    await deleteRestaurant(restaurantId);
+    setRestaurants((prev) => prev.filter((r) => r.id !== restaurantId));
+    setExpanded((cur) => (cur === restaurantId ? null : cur));
+  };
+
+  const handleRemoveMember = async (userId) => {
+    await removeMember(listId, userId);
+    setMembers((prev) => prev.filter((m) => m.userId !== userId));
+  };
+
+  const handleDeleteList = async () => {
+    await deleteList(listId);
+    onBack();
+  };
+
   if (loading || (!list && !loadError)) {
     return (
       <div className="min-h-screen bg-[#2a0c0f] flex items-center justify-center">
@@ -870,6 +964,11 @@ function ListView({ listId, userId, myName, onBack }) {
             <button onClick={() => setShowShare(true)} className="text-[#d4a24e] flex items-center gap-1 text-sm font-semibold">
               <Share2 size={14} /> Del
             </button>
+            {list.owner_id === userId && (
+              <button onClick={() => setShowAdmin(true)} className="text-[#c9a876]" aria-label="Administrer liste">
+                <Settings size={14} />
+              </button>
+            )}
           </div>
         </div>
         <button
@@ -964,15 +1063,27 @@ function ListView({ listId, userId, myName, onBack }) {
                           );
                         })}
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditing(r);
-                        }}
-                        className="w-full mt-3 text-[#d4a24e] border border-[#d4a24e]/30 text-xs font-semibold uppercase tracking-widest py-2.5 rounded-lg"
-                      >
-                        Rediger sted og mine vurderinger
-                      </button>
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditing(r);
+                          }}
+                          className="flex-1 text-[#d4a24e] border border-[#d4a24e]/30 text-xs font-semibold uppercase tracking-widest py-2.5 rounded-lg"
+                        >
+                          Rediger sted og mine vurderinger
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteRestaurant(r.id);
+                          }}
+                          className="text-red-300 border border-red-400/30 px-3.5 rounded-lg"
+                          aria-label="Slett restaurant"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1003,6 +1114,16 @@ function ListView({ listId, userId, myName, onBack }) {
           initialValue={list.name}
           onSave={handleRenameList}
           onClose={() => setRenamingList(false)}
+        />
+      )}
+      {showAdmin && (
+        <AdminModal
+          list={list}
+          members={members}
+          ownerId={list.owner_id}
+          onRemoveMember={handleRemoveMember}
+          onDeleteList={handleDeleteList}
+          onClose={() => setShowAdmin(false)}
         />
       )}
     </div>
