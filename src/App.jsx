@@ -89,10 +89,9 @@ async function findListByCode(code) {
 }
 
 async function joinList(listId, userId) {
-  const { error } = await supabase
-    .from("list_members")
-    .upsert({ list_id: listId, user_id: userId }, { onConflict: "list_id,user_id", ignoreDuplicates: true });
-  if (error) throw error;
+  const { error } = await supabase.from("list_members").insert({ list_id: listId, user_id: userId });
+  // 23505 = unique_violation, meaning they're already a member — that's fine, not an error.
+  if (error && error.code !== "23505") throw error;
 }
 
 async function getList(id) {
